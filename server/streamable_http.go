@@ -530,9 +530,6 @@ func (s *StreamableHTTPServer) CloseSessions(ctx context.Context) {
 		if !ok {
 			return true
 		}
-		if session, ok := value.(*streamableHttpSession); ok {
-			session.closeDone()
-		}
 		sessionIDs = append(sessionIDs, sessionID)
 		return true
 	})
@@ -1471,7 +1468,15 @@ func (s *StreamableHTTPServer) cleanupSessionState(ctx context.Context, sessionI
 	}
 	// Unregister first to stop notification routing before deleting data.
 	s.server.UnregisterSession(ctx, sessionID)
-	s.activeSessions.Delete(sessionID)
+	// Atomically load and remove the session so that no concurrent
+	// LoadOrStore can slip a new session in between the Load and the
+	// Delete. Close the done channel to unblock any long-lived GET
+	// handlers so they exit promptly.
+	if v, ok := s.activeSessions.LoadAndDelete(sessionID); ok {
+		if session, ok := v.(*streamableHttpSession); ok {
+			session.closeDone()
+		}
+	}
 	s.sessionTools.delete(sessionID)
 	s.sessionResources.delete(sessionID)
 	s.sessionResourceTemplates.delete(sessionID)
